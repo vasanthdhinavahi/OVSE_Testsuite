@@ -3,7 +3,7 @@
 export const OVSE_CONFIG = {
   clientId: '000',
   licenseNumber: '00b1',
-  callbackUrl: 'https://pehchaanstage.uidai.gov.in/samvaad/mdc/v1/callback',
+  callbackUrl: 'https://164.100.114.69/NGDRS_HP_AUDIT/Ekycqr/callback',
   publicKey: `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqDH9UQuBRGzBEHehmUX5
 /xIg4p1Qte2Kvv2uIGVC5IDMdSYaFaK0b8ASXGceJe6HmXbbO8LCuz1MLEN9NBr1

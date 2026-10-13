@@ -162,7 +162,75 @@ function App(){
 function Details({config,copy}){return <section><div className="sectionIntro"><span className="eyebrow">REGISTERED CONFIGURATION</span><h2>Integration Details</h2><p>These values are already associated with this OVSE. The developer does not need to enter them again.</p></div><div className="grid"><Card title="Client ID" value={config.clientId}/><Card title="License Number" value={config.licenseNumber}/><Card title="Callback URL" value={config.callbackUrl}/><div className="card wide"><div className="cardtop"><h3>Public Key Submitted</h3><button onClick={()=>copy(config.publicKey)}>Copy</button></div><pre>{config.publicKey}</pre></div></div></section>;}
 function Card({title,value}){return <div className="card"><span>{title}</span><strong>{value}</strong></div>}
 
-function JWTRef({sample,copy,download,onContinue}){const json=JSON.stringify(sample,null,2);return <section><div className="sectionIntro"><span className="eyebrow">REFERENCE ONLY</span><h2>JWT Structure</h2><p>This page does not generate or sign a JWT. It shows the structure the OVSE implementation is expected to produce.</p></div><div className="codecard"><div className="codehead"><b>Payload</b><div><button onClick={()=>copy(json)}>Copy JSON</button><button onClick={()=>download('ovse-jwt-payload.json',json)}>Download</button></div></div><pre>{json}</pre></div><div className="format"><h3>JWT format</h3><code>BASE64URL(HEADER) . BASE64URL(PAYLOAD) . BASE64URL(SIGNATURE)</code><p>The actual JWT must be generated and signed by the OVSE application using the private key corresponding to the public key submitted during onboarding.</p></div><div className="continueSection"><button className="primary" onClick={onContinue}>Continue to Validation →</button></div></section>;}
+const CLAIM_BITS=[
+  [1,'credentialIssuingDate'],[2,'enrolmentDate'],[3,'enrolmentNumber'],[4,'isNRI'],
+  [5,'residentImage'],[6,'residentName'],[7,'localResidentName'],[8,'ageAbove18'],
+  [9,'ageAbove50'],[10,'ageAbove60'],[11,'ageAbove75'],[12,'dob'],[13,'gender'],
+  [14,'careOf'],[15,'localCareOf'],[16,'building'],[17,'localBuilding'],[18,'locality'],
+  [19,'localLocality'],[20,'street'],[21,'localStreet'],[22,'landmark'],[23,'localLandmark'],
+  [24,'vtc'],[25,'localVtc'],[26,'subDistrict'],[27,'localSubDistrict'],[28,'district'],
+  [29,'localDistrict'],[30,'state'],[31,'localState'],[32,'poName'],[33,'localPoName'],
+  [34,'pincode'],[35,'address'],[36,'regionalAddress'],[37,'mobile'],[38,'maskedMobile'],
+  [39,'email'],[40,'maskedEmail'],[42,'maskedAadhaar']
+];
+
+function callbackOrigin(url){try{return new URL(url).origin;}catch{return '';}}
+
+function bitsFromSc(sc){
+  const selected=new Set();
+  for(let i=0;i<42;i++) if(sc[i]==='1'&&i+1!==41) selected.add(i+1);
+  return selected;
+}
+
+function scFromBits(selected){
+  let sc='';
+  for(let bit=1;bit<=42;bit++) sc+=bit===41?'0':(selected.has(bit)?'1':'0');
+  return sc;
+}
+
+function lintLaunch(code){
+  if(!code.trim()) return null;
+  const findings=[];
+  const webIos=/isIOS\s*\(/.test(code)&&code.includes('pehchaan://');
+  if(webIos&&!code.includes('source=web')) findings.push('Web iOS URL needs &source=web after the encoded request.');
+  if(code.includes('source=web')&&code.includes('callback=')) findings.push('&source=web is for web-to-app iOS. App-to-app uses callback= and does not use source=web.');
+  if(/[?&]req=/.test(code)) findings.push('The iOS query name is request, not req.');
+  if(/pehchaan:\/\/in\.gov\.uidai\.pehchaan/.test(code)) findings.push('The iOS host is in.gov.uidai.pehchan (one a). The two-a spelling is the Android package.');
+  if(code.includes('S.request=(token)')) findings.push('S.request=(token) sends the literal text (token). Put the JWT in S.request.');
+  if(code.includes('INTENT_REQUEST')&&!/package/.test(code)) findings.push('Set package to in.gov.uidai.pehchaan on the app-to-app intent.');
+  const appIos=code.includes('pehchaan://')&&/[?&]request=/.test(code)&&!code.includes('encodeURIComponent')&&!code.includes('isIOS');
+  if(appIos&&!code.includes('callback')) findings.push('App-to-app iOS needs callback= with your app callback name.');
+  return findings;
+}
+
+function JWTRef({sample,copy,download,onContinue}){
+  const [selected,setSelected]=useState(()=>bitsFromSc(sample.sc));
+  const [pop,setPop]=useState(sample.pop===0?0:1);
+  const [ch,setCh]=useState('app');
+  const toggle=bit=>setSelected(prev=>{const next=new Set(prev);next.has(bit)?next.delete(bit):next.add(bit);return next;});
+  const payload={...sample,lang:'23',m:'1',pop,ch,sc:scFromBits(selected),aud:callbackOrigin(sample.cb)||sample.aud};
+  const json=JSON.stringify(payload,null,2);
+  return <section>
+    <div className="sectionIntro"><span className="eyebrow">REFERENCE ONLY</span><h2>JWT Structure</h2><p>This page does not sign a JWT. Choose the claims and whether face verification runs. <code>lang</code> stays <code>"23"</code> and <code>m</code> stays <code>"1"</code>. Bit 41 stays <code>0</code>. Sign the result with the private key for the registered public key. Use a new token per flow, with <code>ch</code> set to <code>app</code>, <code>web</code>, or <code>qr</code>.</p></div>
+    <div className="invocationCard">
+      <span className="invocationSectionTitle">CLAIMS</span>
+      <h3>Bitmap sc</h3>
+      <div className="claimGrid">{CLAIM_BITS.map(([bit,name])=><label key={bit}><input type="checkbox" checked={selected.has(bit)} onChange={()=>toggle(bit)}/>{bit}. {name}</label>)}</div>
+      <p className="muted">Bit 41 is undefined and stays 0. Length is {payload.sc.length}.</p>
+      <div className="lockedRow"><span>lang = "23"</span><span>m = "1"</span><span>sc = {payload.sc}</span></div>
+      <h3>pop</h3>
+      <div className="popChoices">
+        <label><input type="radio" name="pop" checked={pop===1} onChange={()=>setPop(1)}/> <b>1</b> — face verification runs, then the credential is shared.</label>
+        <label><input type="radio" name="pop" checked={pop===0} onChange={()=>setPop(0)}/> <b>0</b> — face verification is skipped and the credential is shared directly.</label>
+      </div>
+      <h3>ch for this payload</h3>
+      <div className="actions" style={{justifyContent:'flex-start'}}>{['app','web','qr'].map(value=><button key={value} className={ch===value?'primary':''} onClick={()=>setCh(value)}>{value}</button>)}</div>
+    </div>
+    <div className="codecard"><div className="codehead"><b>Payload</b><div><button onClick={()=>copy(json)}>Copy JSON</button><button onClick={()=>download('ovse-jwt-payload.json',json)}>Download</button></div></div><pre>{json}</pre></div>
+    <div className="format"><h3>JWT format</h3><code>BASE64URL(HEADER) . BASE64URL(PAYLOAD) . BASE64URL(SIGNATURE)</code><p>The actual JWT must be generated and signed by the OVSE application using the private key corresponding to the public key submitted during onboarding.</p></div>
+    <div className="continueSection"><button className="primary" onClick={onContinue}>Continue to Validation →</button></div>
+  </section>;
+}
 
 function PayloadViewer({payload,out}){
   const invalidFields=new Set(Object.entries(payloadTestByField).filter(([,id])=>out?.[id]?.[0]===false).map(([field])=>field));
@@ -193,12 +261,38 @@ function Suite({token,setToken,run,result,groups,tests,copy,downloadTestResultsP
 
 function Invocation({token,result,copy,download}){
   const [qr,setQr]=useState(null); const [loading,setLoading]=useState(false); const [error,setError]=useState('');
+  const [snippet,setSnippet]=useState(''); const [lint,setLint]=useState(null);
   const parsed=useMemo(()=>{try{return parseJWT(token);}catch{return null;}},[token]);
-  const encodedRequest=useMemo(()=>encodeURIComponent(token||''),[token]);
-  const iosApp=`pehchaan://in.gov.uidai.pehchan?req=${encodedRequest}`;
-  const iosWeb=`pehchaan://in.gov.uidai.pehchan?request=${encodedRequest}&source=web`;
-  const androidAppAction='in.gov.uidai.pehchaan.INTENT_REQUEST';
-  const androidWebAction='in.gov.uidai.pehchaan.WEB_INTENT_REQUEST';
+  const androidApp=`val intent = Intent("in.gov.uidai.pehchaan.INTENT_REQUEST").apply {
+    \`package\` = "in.gov.uidai.pehchaan"
+    putExtra("request", jwt)
+}
+try {
+    startActivity(intent)
+} catch (e: ActivityNotFoundException) {
+    try {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=in.gov.uidai.pehchaan")))
+    } catch (ex: ActivityNotFoundException) {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=in.gov.uidai.pehchaan")))
+    }
+}`;
+  const iosApp=`let customurl = "pehchaan://in.gov.uidai.pehchan?request=\\(jwt)&callback=\\(callback)"
+guard let encodedurl = customurl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+      let url = URL(string: encodedurl) else { return }
+if UIApplication.shared.canOpenURL(url) {
+    UIApplication.shared.open(url)
+} else if let store = URL(string: "https://apps.apple.com/in/app/aadhaar/id6744029871") {
+    UIApplication.shared.open(store)
+}`;
+  const webIos=`if (isMobile() && isIOS()) {
+  const encodedRequest = encodeURIComponent(jwt);
+  const appUrl = "pehchaan://in.gov.uidai.pehchan?request=" + encodedRequest + "&source=web";
+  window.location.href = appUrl;
+}`;
+  const webAndroid=`if (isMobile() && android) {
+  const url = "intent:#Intent;action=in.gov.uidai.pehchaan.WEB_INTENT_REQUEST;S.request=" + jwt + ";end";
+  window.location.href = url;
+}`;
 
   const generateQR=async()=>{
     if(!token.trim()){setError('Validate a JWT first.');return;}
@@ -219,6 +313,15 @@ function Invocation({token,result,copy,download}){
       withDelimiter[isoBytes.length]=0xFF;
 
       const compressed=pako.gzip(withDelimiter,{level:9});
+      // Match gzip.compress: current unix mtime, XFL 2, OS byte 255.
+      // pako writes mtime 0 and OS byte 3, which changes the base-10 value.
+      const mtime=Math.floor(Date.now()/1000);
+      compressed[4]=mtime&0xff;
+      compressed[5]=(mtime>>>8)&0xff;
+      compressed[6]=(mtime>>>16)&0xff;
+      compressed[7]=(mtime>>>24)&0xff;
+      compressed[8]=2;
+      compressed[9]=255;
       let bigIntValue=0n;
       for(const byte of compressed){
         bigIntValue=(bigIntValue<<8n)+BigInt(byte);
@@ -229,7 +332,7 @@ function Invocation({token,result,copy,download}){
       const pngDataUrl=await QRCode.toDataURL(url,{
         errorCorrectionLevel:'H',
         margin:4,
-        width:560
+        scale:10
       });
 
       const hashBuffer=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(jwtString));
@@ -257,22 +360,20 @@ function Invocation({token,result,copy,download}){
       {qr&&<div className="qrLayout"><div className="qrBox"><img src={qr.pngDataUrl} alt="Generated OVSE QR"/><button onClick={qrDownload}>Download QR PNG</button></div><div className="qrMeta"><div className="card"><span>QR Base10 Value</span><code className="breakcode">{qr.value}</code></div><div className="card"><div className="cardtop"><h3>QR URL</h3><button onClick={()=>copy(qr.url)}>Copy</button></div><code className="breakcode">{qr.url}</code></div><div className="card"><span>JWT SHA-256</span><code className="breakcode">{qr.jwtSha256}</code></div></div></div>}
     </div>
 
-    <div className="invocationCard"><span className="invocationSectionTitle">2 • APP-TO-APP INTENT REQUEST</span><h3>Android</h3><p>Use the Pehchaan intent action and send the request in the <code>request</code> extra.</p><div className="codecard"><div className="codehead"><b>Android / Kotlin</b><button onClick={()=>copy(`val intent = Intent("${androidAppAction}").apply {\n    putExtra("request", payload.value)\n}`)}>Copy</button></div><pre>{`val intent = Intent("${androidAppAction}").apply {
-    putExtra("request", payload.value)
-}`}</pre></div><h3>iOS</h3><p>Construct the Pehchaan custom URL with the request in the <code>req</code> query parameter.</p><div className="codecard"><div className="codehead"><b>iOS / Swift</b><button onClick={()=>copy(`let customurl = "${iosApp}"`)}>Copy</button></div><pre>{`let customurl = "${iosApp}"
-guard let encodedurl = customurl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-    return
-}
-if let url = URL(string: encodedurl) {
-    if UIApplication.shared.canOpenURL(url) {
-        UIApplication.shared.open(url)
-    }
-}`}</pre></div></div>
+    <div className="invocationCard"><span className="invocationSectionTitle">2 • APP-TO-APP INTENT REQUEST</span><h3>Android</h3><p>Set the package to <code>in.gov.uidai.pehchaan</code> and send the JWT in the <code>request</code> extra.</p><div className="codecard"><div className="codehead"><b>Android / Kotlin</b><button onClick={()=>copy(androidApp)}>Copy</button></div><pre>{androidApp}</pre></div><h3>iOS</h3><p>Host <code>in.gov.uidai.pehchan</code> (one a). Query name <code>request</code>, plus your app <code>callback</code>.</p><div className="codecard"><div className="codehead"><b>iOS / Swift</b><button onClick={()=>copy(iosApp)}>Copy</button></div><pre>{iosApp}</pre></div></div>
 
-    <div className="invocationCard"><span className="invocationSectionTitle">3 • WEB-TO-APP INTENT REQUEST</span><h3>iOS</h3><p>For a web-originated request, use the Pehchaan URL with <code>request</code> and <code>source=web</code>.</p><div className="codecard"><div className="codehead"><b>Web → iOS</b><button onClick={()=>copy(`pehchaan://in.gov.uidai.pehchan?request=${encodedRequest}&source=web`)}>Copy</button></div><pre>{`if (isIOS()) {
-  return \`pehchaan://in.gov.uidai.pehchan?request=${'${encodedRequest}'}&source=web\`;
-}`}</pre></div><h3>Android</h3><p>For Android, use an Android Intent URI with the Pehchaan web-intent action and the request as the <code>S.request</code> extra.</p><div className="codecard"><div className="codehead"><b>Web → Android</b><button onClick={()=>copy(`intent:#Intent;action=${androidWebAction};S.request=(token);end`)}>Copy</button></div><pre>{`const url = "intent:#Intent;action=${androidWebAction};S.request=(token);end";
-window.location.replace(url);`}</pre></div></div>
+    <div className="invocationCard">
+      <span className="invocationSectionTitle">3 • WEB-TO-APP INTENT REQUEST</span>
+      <p>On a phone, the page opens Pehchaan immediately. A desktop browser shows the QR. <code>ch</code> on this token is <code>"web"</code>. Do not follow the intent URL with an App Store or Play Store timeout.</p>
+      <h3>iOS</h3>
+      <p>Set <code>window.location.href</code> to <code>pehchaan://in.gov.uidai.pehchan?request=</code> plus the encoded JWT, then <code>&amp;source=web</code>.</p>
+      <div className="codecard"><div className="codehead"><b>if (isIOS())</b><button onClick={()=>copy(webIos)}>Copy</button></div><pre>{webIos}</pre></div>
+      <h3>Android</h3>
+      <p>Set <code>window.location.href</code> to the intent URL. <code>S.request=(token)</code> sends the six characters <code>(token)</code>. Put the JWT variable there.</p>
+      <div className="codecard"><div className="codehead"><b>if (android)</b><button onClick={()=>copy(webAndroid)}>Copy</button></div><pre>{webAndroid}</pre></div>
+    </div>
+
+    <div className="invocationCard"><span className="invocationSectionTitle">4 • CHECK EXISTING LAUNCH CODE</span><h3>Paste the invocation you already ship</h3><p className="muted">Flags a web iOS URL missing <code>&amp;source=web</code>, query name <code>req</code>, an iOS host spelled <code>pehchaan</code>, the literal <code>(token)</code>, a missing Android package, and a missing iOS callback.</p><textarea value={snippet} onChange={e=>{setSnippet(e.target.value);setLint(null);}} placeholder="Paste Android, iOS, or web launch code..."/><div className="actions"><button className="primary" onClick={()=>setLint(lintLaunch(snippet))} disabled={!snippet.trim()}>Check snippet</button></div>{lint&&(lint.length===0?<p className="lintOk">No known launch mistakes in this snippet.</p>:<ul className="lintList">{lint.map(item=><li key={item}>{item}</li>)}</ul>)}</div>
 
     <div className="note"><b>Validated JWT:</b> {parsed?'JWT parsed successfully and is reused for QR/invocation generation.':'No validated JWT is currently available. Return to Validate Request first.'}</div>
   </section>;
@@ -280,21 +381,44 @@ window.location.replace(url);`}</pre></div></div>
 
 function Callback({config,token,result,setResult}){
   const defaultTxn=(()=>{try{return parseJWT(token).payload.txn||'';}catch{return '';}})();
-  const [txnId,setTxnId]=useState(defaultTxn); const [credential,setCredential]=useState(token||''); const [loading,setLoading]=useState(false); const [xml,setXml]=useState(''); const [sslLoading,setSslLoading]=useState(false); const [sslResult,setSslResult]=useState(null);
+  const [txnId,setTxnId]=useState(defaultTxn); const [credential,setCredential]=useState(token||''); const [loading,setLoading]=useState(false); const [xml,setXml]=useState(''); const [sslLoading,setSslLoading]=useState(false); const [sslResult,setSslResult]=useState(null); const [readyLoading,setReadyLoading]=useState(false); const [ready,setReady]=useState(null);
   useEffect(()=>{if(defaultTxn)setTxnId(defaultTxn);if(token)setCredential(token);},[token,defaultTxn]);
   const buildXml=(txn=txnId,cred=credential)=>`<?xml version="1.0" encoding="UTF-8"?>\n<Request>\n  <TxnID>${escapeXml(txn)}</TxnID>\n  <Credential>${escapeXml(cred)}</Credential>\n</Request>`;
   const parseAcknowledgement=(text,requestTxn)=>{try{const doc=new DOMParser().parseFromString(text,'application/xml');if(doc.querySelector('parsererror'))throw new Error('Response is not valid XML.');const responseTxn=doc.querySelector('TxnID')?.textContent?.trim()||'';const responseCode=doc.querySelector('ResponseCode')?.textContent?.trim()||'';const responseMsg=doc.querySelector('ResponseMsg')?.textContent?.trim()||'';return {validXml:true,txnMatch:responseTxn===requestTxn,responseTxn,responseCode,responseMsg,success:responseTxn===requestTxn&&responseCode==='200'&&responseMsg==='Success'};}catch(error){return {validXml:false,success:false,error:error.message};}};
   const sendCallback=async()=>{setLoading(true);setResult(null);const body=buildXml();setXml(body);try{const response=await fetch('/api/callback-test',{method:'POST',headers:{'Content-Type':'application/xml','Accept':'application/xml'},body});const text=await response.text();const acknowledgement=parseAcknowledgement(text,txnId);setResult({status:response.status,httpOk:response.ok,request:body,response:text,acknowledgement,ok:response.ok&&acknowledgement.success});}catch(error){setResult({status:0,httpOk:false,request:body,response:'',acknowledgement:{success:false},ok:false,error:error.message});}finally{setLoading(false);}};
   const runSSLCheck=async()=>{setSslLoading(true);setSslResult(null);try{const response=await fetch('/api/callback-ssl-check');const data=await response.json();setSslResult(data);}catch(error){setSslResult({ok:false,error:error.message});}finally{setSslLoading(false);}};
+  const runReady=async()=>{
+    setReadyLoading(true);setReady(null);
+    const probeTxn=txnId.trim()||'00000000-0000-4000-8000-000000000001';
+    const probeCred=credential.trim()||'probe';
+    let ssl={ok:false,https:false,authorized:false,hostnameValid:false,validityValid:false,chainValid:false};
+    try{const response=await fetch('/api/callback-ssl-check');ssl=await response.json();}catch(error){ssl={...ssl,error:error.message};}
+    setSslResult(ssl);
+    const body=buildXml(probeTxn,probeCred);setXml(body);
+    let postResult;
+    try{
+      const response=await fetch('/api/callback-test',{method:'POST',headers:{'Content-Type':'application/xml','Accept':'application/xml'},body});
+      const text=await response.text();
+      const acknowledgement=parseAcknowledgement(text,probeTxn);
+      const postAccepted=response.status>0&&response.status<500&&![301,302,405].includes(response.status);
+      postResult={status:response.status,httpOk:response.ok,request:body,response:text,acknowledgement,postAccepted,ok:postAccepted&&acknowledgement.success};
+    }catch(error){
+      postResult={status:0,httpOk:false,request:body,response:'',acknowledgement:{success:false,validXml:false},postAccepted:false,ok:false,error:error.message};
+    }
+    setResult(postResult);
+    setReady({chain:!!ssl.chainValid,tls:!!(ssl.https&&ssl.authorized&&ssl.hostnameValid&&ssl.validityValid),post:!!postResult.postAccepted,xml:!!postResult.acknowledgement?.success});
+    setReadyLoading(false);
+  };
   return <section><div className="sectionIntro"><span className="eyebrow">CALLBACK INTEGRATION</span><h2>Callback Testing</h2><p>The callback endpoint receives a <code>&lt;Request&gt;</code> containing <code>TxnID</code> and <code>Credential</code>. It must return a <code>&lt;Response&gt;</code> acknowledgement with the same TxnID, ResponseCode 200 and ResponseMsg Success.</p></div>
     <div className="card"><span>Configured Callback URL</span><strong>{config.callbackUrl}</strong></div>
+    <div className="invocationCard"><div className="invocationHeader"><div><span className="eyebrow">READY CHECK</span><h3>Chain, TLS, POST, and XML</h3></div><button className="primary" onClick={runReady} disabled={readyLoading}>{readyLoading?'Checking…':'Run ready check'}</button></div><p className="muted">Runs the certificate chain check and a POST of the callback XML. The chain passes only when the server presents the leaf and at least one issuer certificate. POST passes when the status is not 301, 302, or 405. XML passes when the body echoes TxnID with ResponseCode 200 and ResponseMsg Success.</p>{ready&&<div className="ackGrid"><div className={ready.chain?'checkpass':'checkfail'}>{ready.chain?'✓':'✕'} Complete certificate chain</div><div className={ready.tls?'checkpass':'checkfail'}>{ready.tls?'✓':'✕'} TLS trusted and hostname matches</div><div className={ready.post?'checkpass':'checkfail'}>{ready.post?'✓':'✕'} POST accepted</div><div className={ready.xml?'checkpass':'checkfail'}>{ready.xml?'✓':'✕'} XML acknowledgement</div></div>}</div>
 
     <div className="invocationCard"><div className="invocationHeader"><div><span className="eyebrow">1 • SSL / CERTIFICATE VALIDATION</span><h3>Validate Callback TLS</h3></div><button className="primary" onClick={runSSLCheck} disabled={sslLoading}>{sslLoading?'Checking…':'Run SSL / Certificate Check'}</button></div><p className="muted">Certificate validation is performed against the configured callback endpoint outside browser JavaScript. The check verifies HTTPS/TLS connectivity, certificate hostname authorization, validity dates, trust status, and the presented certificate chain.</p>{sslResult&&<div className={`callbackresult ${sslResult.ok?'success':'failure'}`}><div className="ackGrid">
       <div className={sslResult.https?'checkpass':'checkfail'}>{sslResult.https?'✓':'✕'} HTTPS URL</div>
       <div className={sslResult.authorized?'checkpass':'checkfail'}>{sslResult.authorized?'✓':'✕'} Certificate trusted</div>
       <div className={sslResult.hostnameValid?'checkpass':'checkfail'}>{sslResult.hostnameValid?'✓':'✕'} Hostname matches certificate</div>
       <div className={sslResult.validityValid?'checkpass':'checkfail'}>{sslResult.validityValid?'✓':'✕'} Certificate validity period</div>
-      <div className={sslResult.chainValid?'checkpass':'checkfail'}>{sslResult.chainValid?'✓':'✕'} Certificate chain</div>
+      <div className={sslResult.chainValid?'checkpass':'checkfail'}>{sslResult.chainValid?'✓':'✕'} Certificate chain includes an issuer</div>
     </div>{sslResult.error&&<pre>{sslResult.error}</pre>}{sslResult.certificate&&<div className="certificateDetails"><b>Server Certificate</b><div>Subject: {sslResult.certificate.subject}</div><div>Issuer: {sslResult.certificate.issuer}</div><div>Valid From: {sslResult.certificate.validFrom}</div><div>Valid To: {sslResult.certificate.validTo}</div><div>Fingerprint: {sslResult.certificate.fingerprint256}</div><div>Chain certificates presented: {sslResult.certificate.chainLength}</div></div>}</div>}</div>
 
     <div className="invocationCard"><span className="eyebrow">2 • CALLBACK REQUEST</span><h3>Send Callback Request</h3><div className="inputcard callbackform"><div className="field"><label>TxnID</label><input value={txnId} onChange={e=>setTxnId(e.target.value)} placeholder="Transaction ID"/></div><div className="field"><label>Credential</label><textarea value={credential} onChange={e=>setCredential(e.target.value)} placeholder="Paste the Credential / JWT here..."/></div><div className="actions"><button className="primary" onClick={sendCallback} disabled={loading||!txnId||!credential}>{loading?'Sending…':'Send Callback Request'}</button></div></div></div>

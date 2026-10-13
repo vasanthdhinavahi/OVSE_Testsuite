@@ -56,17 +56,21 @@ function sslCheckMiddleware() {
           return;
         }
 
+        const hostname = callbackUrl.hostname;
+        const ipHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':');
         const options = {
-          hostname: callbackUrl.hostname,
+          hostname,
           port: callbackUrl.port ? Number(callbackUrl.port) : 443,
           path: callbackUrl.pathname + callbackUrl.search,
           method: 'HEAD',
-          rejectUnauthorized: true,
-          timeout: 10000,
-          servername: callbackUrl.hostname
+          rejectUnauthorized: false,
+          timeout: 10000
         };
+        if (!ipHost) options.servername = hostname;
 
-        const request = https.request(options, response => {
+        let request;
+        try {
+          request = https.request(options, response => {
           const socket = response.socket;
           const cert = socket.getPeerCertificate(true);
           const authorized = socket.authorized === true;
@@ -77,7 +81,7 @@ function sslCheckMiddleware() {
           const validityValid = !!validFrom && !!validTo && now >= validFrom && now <= validTo;
           const hostnameValid = authorized && !authorizationError;
           const chain = certificateDetails(cert);
-          const chainValid = authorized && chain.chainLength >= 1;
+          const chainValid = chain.chainLength >= 2;
 
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({
@@ -93,6 +97,20 @@ function sslCheckMiddleware() {
           }));
           response.resume();
         });
+
+        } catch (error) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            ok:false,
+            https:true,
+            authorized:false,
+            hostnameValid:false,
+            validityValid:false,
+            chainValid:false,
+            error:error.message
+          }));
+          return;
+        }
 
         request.on('timeout', () => request.destroy(new Error('TLS connection timed out.')));
         request.on('error', error => {
